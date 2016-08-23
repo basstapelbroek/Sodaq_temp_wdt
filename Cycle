@@ -1,0 +1,312 @@
+//Lorabee
+#include <Sodaq_RN2483.h>
+
+
+//Tempsemsor outside
+#include <math.h>
+
+const int B=4275;                 // B value of the thermistor
+const int R0 = 100000;            // R0 = 100k
+const int pinTempSensor = A2;     // Grove - Temperature Sensor connect to A5
+
+
+// Autonomo 
+#define debugSerial SerialUSB
+#define beePin BEE_VCC
+////END SETTINGS////
+// LoRaBEE
+#define loraSerial Serial1
+
+const uint8_t devAddr[4] = 
+{
+  0x14, 0x20, 0x4C, 0xF5
+};
+// USE YOUR OWN KEYS!
+const uint8_t appSKey[16] = 
+{
+  0xb5, 0x77, 0xbe, 0x24, 0xa2, 0x2c, 0x93, 0x51,0x44, 0x22, 0x9c, 0xe4, 0x47, 0xa1, 0xd0, 0x5c
+};
+// USE YOUR OWN KEYS!
+const uint8_t nwkSKey[16] = 
+{
+  0xc8, 0xcf, 0x6e, 0x4b, 0x71, 0xbc, 0xe1, 0x64, 0x95, 0x97, 0x2a, 0x29, 0xf1, 0xe1, 0xe7, 0x48
+};
+
+//Watchdog
+
+//watchdog 
+#include "Sodaq_wdt.h"
+
+#ifdef ARDUINO_ARCH_AVR
+
+#include <avr/sleep.h>
+#define DIAG_STREAM Serial
+#define SLEEP_LED LED1
+#define WDT_LED LED2
+
+#elif ARDUINO_ARCH_SAMD
+
+#define DIAG_STREAM SerialUSB
+#define SLEEP_LED LED_BUILTIN
+#define WDT_LED 4
+
+#endif
+
+// Length of LED flash
+#define LED_FLASH_MS 100
+
+//Data
+String temp3;
+
+
+void setup()
+{
+
+  
+  // REMOVE WHEN YOU DONT USE PC
+  while(!debugSerial);
+  debugSerial.begin(57600);
+  loraSerial.begin(LoRaBee.getDefaultBaudRate());
+        digitalWrite(beePin, HIGH);
+  LoRaBee.setDiag(debugSerial); // optional
+
+   
+  if (LoRaBee.initABP(loraSerial, devAddr, appSKey, nwkSKey, true))
+  {
+    debugSerial.println("Connection to the network was successful.");
+  }
+  else
+  {
+    debugSerial.println("Connection to the network failed!");
+  }
+
+
+// Startup delay WD
+  delay(5000);
+  
+  // Supported periods on both platforms
+  // WDT_PERIOD_1DIV64 = 1/64s
+  // WDT_PERIOD_1DIV32 = 1/32s
+  // WDT_PERIOD_1DIV16 = 1/16s
+  // WDT_PERIOD_1DIV8  = 1/8s
+  // WDT_PERIOD_1DIV4  = 1/4s
+  // WDT_PERIOD_1DIV2  = 1/2s
+  // WDT_PERIOD_1X     = 1s
+  // WDT_PERIOD_2X     = 2s
+  // WDT_PERIOD_4X     = 4s
+  // WDT_PERIOD_8X     = 8s
+  // Default parameter is set to WDT_PERIOD_1X = 1s
+  // Sodaq_wdt.cpp has a rule GCLK_GENDIV_DIV(4);, putting 4 (wdt period  8 sec) to 5 (16), 6(32), 7(1.04), 8 (2.08), 9 (4.16) 10 (8.32) doubles the WDT etc etc 
+
+  
+    
+  // Enable WDT
+sodaq_wdt_enable(WDT_PERIOD_8X);  
+
+  // Setup LED's IO pins
+  pinMode(SLEEP_LED, OUTPUT);
+  pinMode(WDT_LED, OUTPUT);
+
+  // Startup message (also seen after a reset)
+  DIAG_STREAM.begin(57600);
+  DIAG_STREAM.println("Start up");
+
+  
+}
+
+void loop()
+{
+   
+  // If the WDT interrupt has been triggered
+  if (sodaq_wdt_flag) {
+    sodaq_wdt_flag = false;   
+      
+    
+    DIAG_STREAM.println("WDT interrupt has been triggered");
+    setupTempOut();
+    GetData_Send();
+    
+
+    // Flash LED
+    digitalWrite(WDT_LED, HIGH);
+    sodaq_wdt_safe_delay(LED_FLASH_MS);
+    digitalWrite(WDT_LED, LOW);
+    delay(5000);
+    sodaq_wdt_reset();
+  }
+  
+  // Try and enter sleep mode
+  //systemSleep();
+}
+
+void setupTempOut()
+{
+  int a = analogRead(pinTempSensor );
+  //int temp2;
+  
+      float R = 1023.0/((float)a)-1.0;
+    R = 100000.0*R;
+ 
+    float temperature=1.0/(log(R/100000.0)/B+1/298.15)-273.15;//convert to temperature via datasheet ;
+ 
+    SerialUSB.print("temperature = ");
+    SerialUSB.println(temperature);
+    //temperature = temperature * 100;
+    //temp2 = (int) temperature;
+    temp3 = (String) temperature;  
+    
+    delay(100);
+}
+
+
+//functie versturen van data + payload halen uit reading
+void GetData_Send()
+{
+  
+debugSerial.println("Sending payload: TempOut, Tempin, Weight, Air");
+  String reading = takeTPHReading();
+  //sendPayload((uint8_t*)reading.c_str(), reading.length());
+  debugSerial.println();
+ // LoRaBee.sendReqAck(1, (uint8_t*)reading.c_str(), reading.length(), 8); //gebruik deze als je ack aan wil hebben (en onderstaande foutcodes)
+  LoRaBee.send(1, (uint8_t*)reading.c_str(), reading.length());
+
+  
+/*    
+    switch (LoRaBee.sendReqAck(1, (uint8_t*)reading.c_str(), reading.length(), 8))
+
+    {
+    
+    
+    case NoError:
+      debugSerial.println("Successful transmission.");
+      break;
+    case NoResponse:
+      debugSerial.println("There was no response from the device.");
+      break;
+   case Timeout:
+      debugSerial.println("Connection timed-out. Check your serial connection to the device! Sleeping for 10sec.");
+      delay(10000);
+      break;
+   
+    case PayloadSizeError:
+      debugSerial.println("The size of the payload is greater than allowed. Transmission failed!");
+      break;
+    case InternalError:
+      debugSerial.println("Oh No! This shouldn't happen. Something is really wrong! Try restarting the device!rnThe program will try again next time.");
+      //while (1) {};
+      break;
+    case Busy:
+      debugSerial.println("The device is busy. Sleeping for 10 extra seconds.");
+      delay(10000);
+      break;
+    case NetworkFatalError:
+      debugSerial.println("There is a non-recoverable error with the network connection. You should re-connect. will try again next time.");
+      //while (1) {};
+      break;
+    
+    case NotConnected:
+      debugSerial.println("The device is not connected to the network. Please connect to the network before attempting to send data.rnThe program will retry next time.");
+      //while (1) {};
+      break;
+    
+    case NoAcknowledgment:
+      debugSerial.println("There was no acknowledgment sent back!");
+      break;
+    default:
+      break;
+    }
+
+    // Delay between readings
+    // 60 000 = 1 minute
+    delay(30000);
+*/
+}
+
+
+//Slaapmodus aan
+void systemSleep()
+{
+#ifdef ARDUINO_ARCH_AVR
+
+  // Wait till the output has been transmitted
+  DIAG_STREAM.flush();
+ 
+  ADCSRA &= ~_BV(ADEN);         // ADC disabled
+
+  /*
+  * Possible sleep modes are (see sleep.h):
+  #define SLEEP_MODE_IDLE         (0)
+  #define SLEEP_MODE_ADC          _BV(SM0)
+  #define SLEEP_MODE_PWR_DOWN     _BV(SM1)
+  #define SLEEP_MODE_PWR_SAVE     (_BV(SM0) | _BV(SM1))
+  #define SLEEP_MODE_STANDBY      (_BV(SM1) | _BV(SM2))
+  #define SLEEP_MODE_EXT_STANDBY  (_BV(SM0) | _BV(SM1) | _BV(SM2))
+  */
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+
+  /*
+   * This code is from the documentation in avr/sleep.h
+   */
+  cli();
+  // Only go to sleep if there was no watchdog interrupt.
+  if (!sodaq_wdt_flag)
+  {
+    // Power on LED before sleep
+    digitalWrite(SLEEP_LED, HIGH);
+    
+    sleep_enable();
+    sei();
+    sleep_cpu();
+    sleep_disable();
+
+    // Power off LED after sleep
+    digitalWrite(SLEEP_LED, LOW);
+    sodaq_wdt_safe_delay(LED_FLASH_MS);
+  }
+  sei();
+
+  ADCSRA |= _BV(ADEN);          // ADC enabled
+  
+#elif ARDUINO_ARCH_SAMD
+
+  // Only go to sleep if there was no watchdog interrupt.
+  if (!sodaq_wdt_flag)
+  {
+    // Power on LED before sleep
+    digitalWrite(SLEEP_LED, HIGH);
+    
+    // Disable USB
+    USBDevice.detach();
+
+    // Set the sleep mode
+    SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
+    
+    // SAMD sleep
+    __WFI();
+    
+    // Power off LED after sleep
+    digitalWrite(SLEEP_LED, LOW);
+    sodaq_wdt_safe_delay(LED_FLASH_MS);
+  }
+  
+#endif
+}
+
+
+String takeTPHReading()
+
+{
+  //Create a String type data record in csv format
+  //TempSHT21, TempBMP, PressureBMP, HumiditySHT21
+ 
+  String data = temp3 + "; ";
+
+  
+  //String data = String(SHT2x.GetTemperature())  + ", ";
+  //data += String(bmp.readTemperature()) + ", ";
+  //data += String(bmp.readPressure() / 100)  + ", ";
+  //data += String(SHT2x.GetHumidity());
+  debugSerial.println(data);
+
+  return data;
+}
